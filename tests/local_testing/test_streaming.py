@@ -681,9 +681,9 @@ def test_completion_ollama_hosted_stream():
 @pytest.mark.parametrize(
     "model",
     [
-        # "claude-instant-1.2",
+        # "claude-3-5-haiku-20241022",
         # "claude-2",
-        # "mistral/mistral-medium",
+        # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],
 )
@@ -718,7 +718,7 @@ async def test_acompletion_claude_2_stream():
     try:
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "hello from litellm"}],
             stream=True,
         )
@@ -736,6 +736,8 @@ async def test_acompletion_claude_2_stream():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError:
         pass
     except Exception as e:
@@ -1112,7 +1114,7 @@ def test_completion_claude_stream_bad_key():
             },
         ]
         response = completion(
-            model="claude-instant-1",
+            model="claude-3-5-haiku-20241022",
             messages=messages,
             stream=True,
             max_tokens=50,
@@ -1145,7 +1147,7 @@ def test_completion_claude_stream_bad_key():
 
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # ""
 def test_vertex_ai_stream(provider):
-    from tests.local_testing.test_amazing_vertex_completion import (
+    from test_amazing_vertex_completion import (
         load_vertex_ai_credentials,
     )
 
@@ -1430,7 +1432,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
         ["meta.llama3-8b-instruct-v1:0", None],
-        ["cohere.command-text-v14", None],
     ],
 )
 @pytest.mark.asyncio
@@ -1918,25 +1919,31 @@ def test_completion_sagemaker_stream():
 
 
 @pytest.mark.skip(reason="Account deleted by IBM.")
-def test_completion_watsonx_stream():
+@pytest.mark.asyncio
+async def test_completion_watsonx_stream():
     litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
     try:
-        response = completion(
-            model="watsonx/ibm/granite-13b-chat-v2",
+        response = await acompletion(
+            model="watsonx/meta-llama/llama-3-1-8b-instruct",
             messages=messages,
             temperature=0.5,
             max_tokens=20,
             stream=True,
+            # client=client
         )
         complete_response = ""
         has_finish_reason = False
         # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
+        idx = 0
+        async for chunk in response:
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finish_reason = finished
             if finished:
                 break
             complete_response += chunk
+            idx += 1
         if has_finish_reason is False:
             raise Exception("finish reason not set for last chunk")
         if complete_response.strip() == "":
@@ -1963,7 +1970,7 @@ def test_completion_watsonx_stream():
 #                 break
 #         if complete_response.strip() == "":
 #             raise Exception("Empty response received")
-#     except:
+#     except Exception:
 #         pytest.fail(f"error occurred: {traceback.format_exc()}")
 # test_maritalk_streaming()
 # test on openai completion call
@@ -1997,7 +2004,7 @@ def ai21_completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except:
+    except Exception:
         pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
@@ -2021,7 +2028,7 @@ def ai21_completion_call_bad_key():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except:
+    except Exception:
         pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
@@ -2148,7 +2155,7 @@ def test_openai_chat_completion_complete_response_call():
             complete_response=True,
         )
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2156,7 +2163,13 @@ def test_openai_chat_completion_complete_response_call():
 # test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307", "o1-preview"],  #
+    [
+        "gpt-3.5-turbo",
+        "azure/chatgpt-v-2",
+        "claude-3-haiku-20240307",
+        "o1-preview",
+        "azure/fake-o1-mini",
+    ],
 )
 @pytest.mark.parametrize(
     "sync",
@@ -2164,6 +2177,7 @@ def test_openai_chat_completion_complete_response_call():
 )
 @pytest.mark.asyncio
 async def test_openai_stream_options_call(model, sync):
+    litellm.enable_preview_features = True
     litellm.set_verbose = True
     usage = None
     chunks = []
@@ -2175,7 +2189,6 @@ async def test_openai_stream_options_call(model, sync):
             ],
             stream=True,
             stream_options={"include_usage": True},
-            max_tokens=10,
         )
         for chunk in response:
             print("chunk: ", chunk)
@@ -2186,7 +2199,6 @@ async def test_openai_stream_options_call(model, sync):
             messages=[{"role": "user", "content": "say GM - we're going to make it "}],
             stream=True,
             stream_options={"include_usage": True},
-            max_tokens=10,
         )
 
         async for chunk in response:
@@ -2282,7 +2294,7 @@ def test_openai_text_completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2315,7 +2327,7 @@ def test_together_ai_completion_call_mistral():
         if complete_response == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2396,7 +2408,7 @@ def test_together_ai_completion_call_starcoder_bad_key():
         print(f"complete response: {complete_response}")
     except BadRequestError as e:
         pass
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2467,7 +2479,7 @@ async def ai21_async_completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2498,7 +2510,7 @@ async def completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2735,7 +2747,7 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     elif idx != 0:  # second chunk
         try:
             decision = validate_second_function_call_chunk_structure(data=chunk)
-        except:  # check if it's the last chunk (returns an empty delta {} )
+        except Exception:  # check if it's the last chunk (returns an empty delta {} )
             decision = validate_final_function_call_chunk_structure(data=chunk)
             finished = True
     if "content" in chunk["choices"][0]["delta"]:
@@ -3123,7 +3135,7 @@ async def test_azure_astreaming_and_function_calling():
             "content": f"What is the weather like in Boston? {uuid.uuid4()}",
         }
     ]
-    from litellm.caching import Cache
+    from litellm.caching.caching import Cache
 
     litellm.cache = Cache(
         type="redis",
@@ -3262,7 +3274,7 @@ def test_completion_claude_3_function_call_with_streaming():
     ],  #  "claude-3-opus-20240229"
 )  #
 @pytest.mark.asyncio
-async def test_acompletion_claude_3_function_call_with_streaming(model):
+async def test_acompletion_function_call_with_streaming(model):
     litellm.set_verbose = True
     tools = [
         {
@@ -3321,6 +3333,10 @@ async def test_acompletion_claude_3_function_call_with_streaming(model):
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
         # raise Exception("it worked! ")
+    except litellm.InternalServerError as e:
+        pytest.skip(f"InternalServerError - {str(e)}")
+    except litellm.ServiceUnavailableError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3458,6 +3474,86 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     else:
         for chunk in response:
             continue
+
+
+def test_unit_test_gemini_streaming_content_filter():
+    chunks = [
+        {
+            "text": "##",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 1, "total_tokens": 38},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": " Downsides of Prompt Hacking in a Customer Portal\n\nWhile prompt engineering can be incredibly",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": "",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "content_filter",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+    ]
+
+    completion_stream = ModelResponseListIterator(model_responses=chunks)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gemini/gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        logging_obj=litellm.Logging(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    stream_finish_reason: Optional[str] = None
+    idx = 0
+    for chunk in response:
+        print(f"chunk: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            stream_finish_reason = chunk.choices[0].finish_reason
+        idx += 1
+    print(f"num chunks: {idx}")
+    assert stream_finish_reason == "content_filter"
 
 
 def test_unit_test_custom_stream_wrapper_openai():
@@ -3751,7 +3847,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         chunk_dict = {}
         try:
             chunk_dict = chunk.model_dump(exclude_none=True)
-        except:
+        except Exception:
             chunk_dict = chunk.dict(exclude_none=True)
 
         chunk_dict.pop("created")
@@ -3951,7 +4047,7 @@ def test_unit_test_perplexity_citations_chunk():
 @pytest.mark.flaky(retries=3, delay=1)
 def test_streaming_tool_calls_valid_json_str(model):
     if "vertex_ai" in model:
-        from tests.local_testing.test_amazing_vertex_completion import (
+        from test_amazing_vertex_completion import (
             load_vertex_ai_credentials,
         )
 

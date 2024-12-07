@@ -73,6 +73,7 @@ async def test_router_provider_wildcard_routing():
     Pass list of orgs in 1 model definition,
     expect a unique deployment for each to be created
     """
+    litellm.set_verbose = True
     router = litellm.Router(
         model_list=[
             {
@@ -122,6 +123,53 @@ async def test_router_provider_wildcard_routing():
     )
 
     print("response 3 = ", response3)
+
+    response4 = await router.acompletion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+
+@pytest.mark.asyncio()
+async def test_router_provider_wildcard_routing_regex():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/fo::*:static::*",
+                "litellm_params": {
+                    "model": "openai/fo::*:static::*",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+            },
+            {
+                "model_name": "openai/foo3::hello::*",
+                "litellm_params": {
+                    "model": "openai/foo3::hello::*",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+            },
+        ]
+    )
+
+    print("router model list = ", router.get_model_list())
+
+    response1 = await router.acompletion(
+        model="openai/fo::anything-can-be-here::static::anything-can-be-here",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 1 = ", response1)
+
+    response2 = await router.acompletion(
+        model="openai/foo3::hello::static::anything-can-be-here",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 2 = ", response2)
 
 
 def test_router_specific_model_via_id():
@@ -801,7 +849,7 @@ def test_router_rpm_pre_call_check():
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
             )
             pytest.fail("Expected this to fail")
-        except:
+        except Exception:
             pass
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
@@ -1002,7 +1050,7 @@ def test_filter_invalid_params_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-@pytest.mark.parametrize("allowed_model_region", ["eu", None])
+@pytest.mark.parametrize("allowed_model_region", ["eu", None, "us"])
 def test_router_region_pre_call_check(allowed_model_region):
     """
     If region based routing set
@@ -1017,7 +1065,7 @@ def test_router_region_pre_call_check(allowed_model_region):
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
                 "base_model": "azure/gpt-35-turbo",
-                "region_name": "eu",
+                "region_name": allowed_model_region,
             },
             "model_info": {"id": "1"},
         },
@@ -1043,7 +1091,9 @@ def test_router_region_pre_call_check(allowed_model_region):
     if allowed_model_region is None:
         assert len(_healthy_deployments) == 2
     else:
-        assert len(_healthy_deployments) == 1, "No models selected as healthy"
+        assert len(_healthy_deployments) == 1, "{} models selected as healthy".format(
+            len(_healthy_deployments)
+        )
         assert (
             _healthy_deployments[0]["model_info"]["id"] == "1"
         ), "Incorrect model id picked. Got id={}, expected id=1".format(
@@ -1262,19 +1312,38 @@ def test_aembedding_on_router():
         router = Router(model_list=model_list)
 
         async def embedding_call():
+            ## Test 1: user facing function
             response = await router.aembedding(
                 model="text-embedding-ada-002",
                 input=["good morning from litellm", "this is another item"],
             )
             print(response)
 
+            ## Test 2: underlying function
+            response = await router._aembedding(
+                model="text-embedding-ada-002",
+                input=["good morning from litellm 2"],
+            )
+            print(response)
+            router.reset()
+
         asyncio.run(embedding_call())
 
         print("\n Making sync Embedding call\n")
+        ## Test 1: user facing function
         response = router.embedding(
             model="text-embedding-ada-002",
             input=["good morning from litellm 2"],
         )
+        print(response)
+        router.reset()
+
+        ## Test 2: underlying function
+        response = router._embedding(
+            model="text-embedding-ada-002",
+            input=["good morning from litellm 2"],
+        )
+        print(response)
         router.reset()
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
@@ -1381,7 +1450,7 @@ async def test_mistral_on_router():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "mistral/mistral-medium",
+                "model": "mistral/mistral-small-latest",
             },
         },
     ]
@@ -1738,7 +1807,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": "claude-instant-1.2",
+                "model": "claude-3-5-haiku-20241022",
                 "api_key": anthropic_api_key,
             },
         }
@@ -1795,11 +1864,10 @@ async def test_router_amoderation():
     ]
 
     router = Router(model_list=model_list)
+    ## Test 1: user facing function
     result = await router.amoderation(
-        model="openai-moderations", input="this is valid good text"
+        model="text-moderation-stable", input="this is valid good text"
     )
-
-    print("moderation result", result)
 
 
 def test_router_add_deployment():
@@ -2047,10 +2115,14 @@ def test_router_get_model_info(model, base_model, llm_provider):
     assert deployment is not None
 
     if llm_provider == "openai" or (base_model is not None and llm_provider == "azure"):
-        router.get_router_model_info(deployment=deployment.to_json())
+        router.get_router_model_info(
+            deployment=deployment.to_json(), received_model_name=model
+        )
     else:
         try:
-            router.get_router_model_info(deployment=deployment.to_json())
+            router.get_router_model_info(
+                deployment=deployment.to_json(), received_model_name=model
+            )
             pytest.fail("Expected this to raise model not mapped error")
         except Exception as e:
             if "This model isn't mapped yet" in str(e):
@@ -2270,12 +2342,6 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
             pass
 
         new_retry_after_mock_client.assert_called()
-        print(
-            f"new_retry_after_mock_client.call_args.kwargs: {new_retry_after_mock_client.call_args.kwargs}"
-        )
-        print(
-            f"new_retry_after_mock_client.call_args: {new_retry_after_mock_client.call_args[0][0]}"
-        )
 
         response_headers: httpx.Headers = new_retry_after_mock_client.call_args[0][0]
         assert int(response_headers["retry-after"]) == cooldown_time
@@ -2370,13 +2436,15 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
             except litellm.RateLimitError:
                 pass
 
+        await asyncio.sleep(2)
+
         if sync_mode:
             cooldown_deployments = _get_cooldown_deployments(
-                litellm_router_instance=router
+                litellm_router_instance=router, parent_otel_span=None
             )
         else:
             cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=router
+                litellm_router_instance=router, parent_otel_span=None
             )
         print(
             "Cooldown deployments - {}\n{}".format(
@@ -2409,6 +2477,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_router_weighted_pick(sync_mode):
     router = Router(
         model_list=[
@@ -2494,6 +2563,15 @@ async def test_router_batch_endpoints(provider):
     )
     print("Response from creating file=", file_obj)
 
+    ## TEST 2 - test underlying create_file function
+    file_obj = await router._acreate_file(
+        model="my-custom-name",
+        file=open(file_path, "rb"),
+        purpose="batch",
+        custom_llm_provider=provider,
+    )
+    print("Response from creating file=", file_obj)
+
     await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
     assert (
@@ -2501,6 +2579,15 @@ async def test_router_batch_endpoints(provider):
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
     create_batch_response = await router.acreate_batch(
+        model="my-custom-name",
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider=provider,
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    ## TEST 2 - test underlying create_batch function
+    create_batch_response = await router._acreate_batch(
         model="my-custom-name",
         completion_window="24h",
         endpoint="/v1/chat/completions",

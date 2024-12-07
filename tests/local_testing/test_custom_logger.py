@@ -41,7 +41,6 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print("Pre-API Call")
-        traceback.print_stack()
         self.data_sent_to_api = kwargs["additional_args"].get("complete_input_dict", {})
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
@@ -296,7 +295,7 @@ async def test_async_custom_handler_completion():
                 messages=messages,
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         assert (
             customHandler_failure.async_failure == True
@@ -352,7 +351,7 @@ async def test_async_custom_handler_embedding():
                 input=["hello world"],
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         assert (
             customHandler_embedding.async_failure_embedding == True

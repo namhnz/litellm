@@ -28,7 +28,6 @@ from typing import (
     Union,
 )
 from unittest.mock import AsyncMock, MagicMock, patch
-
 import httpx
 from dotenv import load_dotenv
 
@@ -42,8 +41,11 @@ from litellm import (
     acompletion,
     completion,
     get_llm_provider,
+    image_generation,
 )
 from litellm.utils import ModelResponseIterator
+from litellm.types.utils import ImageResponse, ImageObject
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 class CustomModelResponseIterator:
@@ -219,6 +221,42 @@ class MyCustomLLM(CustomLLM):
 
         yield generic_streaming_chunk  # type: ignore
 
+    def image_generation(
+        self,
+        model: str,
+        prompt: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout=None,
+        client: Optional[HTTPHandler] = None,
+    ):
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/image.png")],
+            response_ms=1000,
+        )
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout=None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ):
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/image.png")],
+            response_ms=1000,
+        )
+
 
 def test_get_llm_provider():
     """"""
@@ -300,3 +338,62 @@ async def test_simple_completion_async_streaming():
             assert isinstance(chunk.choices[0].delta.content, str)
         else:
             assert chunk.choices[0].finish_reason == "stop"
+
+
+def test_simple_image_generation():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = image_generation(
+        model="custom_llm/my-fake-model",
+        prompt="Hello world",
+    )
+
+    print(resp)
+
+
+@pytest.mark.asyncio
+async def test_simple_image_generation_async():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.aimage_generation(
+        model="custom_llm/my-fake-model",
+        prompt="Hello world",
+    )
+
+    print(resp)
+
+
+@pytest.mark.asyncio
+async def test_image_generation_async_additional_params():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+
+    with patch.object(
+        my_custom_llm, "aimage_generation", new=AsyncMock()
+    ) as mock_client:
+        try:
+            resp = await litellm.aimage_generation(
+                model="custom_llm/my-fake-model",
+                prompt="Hello world",
+                api_key="my-api-key",
+                api_base="my-api-base",
+                my_custom_param="my-custom-param",
+            )
+
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_awaited_once()
+
+        mock_client.call_args.kwargs["api_key"] == "my-api-key"
+        mock_client.call_args.kwargs["api_base"] == "my-api-base"
+        mock_client.call_args.kwargs["optional_params"] == {
+            "my_custom_param": "my-custom-param"
+        }

@@ -1,42 +1,41 @@
 model_list:
-  - model_name: multimodalembedding@001
+  - model_name: gpt-4o
     litellm_params:
-      model: vertex_ai/multimodalembedding@001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json"
-  - model_name: text-embedding-ada-002
+      model: openai/gpt-4o
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: anthropic/*
     litellm_params:
-      model: openai/text-embedding-ada-002                          # The `openai/` prefix will call openai.chat.completions.create
-      api_key: os.environ/OPENAI_API_KEY
- - model_name: db-openai-endpoint
-   litellm_params:
-     model: openai/gpt-3.5-turbo
-     api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
-   model_info:
-     supported_environments: ["development", "production", "staging"]
- - model_name: rerank-english-v3.0
-   litellm_params:
-     model: cohere/rerank-english-v3.0
-     api_key: os.environ/COHERE_API_KEY
-   model_info:
-     supported_environments: ["production", "staging"]
- - model_name: llava-hf
-   litellm_params:
-     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
-     api_key: fake-key
-   model_info:
-     supported_environments: ["production", "staging"]
+      model: anthropic/fake
+      api_base: https://exampleanthropicendpoint-production.up.railway.app/
 
-general_settings:
-    service_account_settings: 
-        enforced_params: ["user"]
 
 
 litellm_settings:
-  drop_params: True
-  callbacks: ["otel"]
-  success_callback: ["langfuse"]
-  failure_callback: ["langfuse"]
+  callbacks: ["datadog"] 
+
+  turn_off_message_logging: True
+
+
+router_settings:
+  provider_budget_config: 
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
+    azure:
+      budget_limit: 100
+      time_period: 1d
+    anthropic:
+      budget_limit: 100
+      time_period: 10d
+    vertex_ai:
+      budget_limit: 100
+      time_period: 12d
+    gemini:
+      budget_limit: 100
+      time_period: 12d
+  
+  # OPTIONAL: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
 

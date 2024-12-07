@@ -14,16 +14,40 @@ else:
 
 
 async def run_async_fallback(
-    litellm_router: LitellmRouter,
     *args: Tuple[Any],
+    litellm_router: LitellmRouter,
     fallback_model_group: List[str],
     original_model_group: str,
     original_exception: Exception,
+    max_fallbacks: int,
+    fallback_depth: int,
     **kwargs,
 ) -> Any:
     """
-    Iterate through the model groups and try calling that deployment.
+    Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
+
+    If the call is successful, it logs the success and returns the response.
+    If the call fails, it logs the failure and continues to the next fallback model group.
+    If all fallback model groups fail, it raises the most recent exception.
+
+    Args:
+        litellm_router: The litellm router instance.
+        *args: Positional arguments.
+        fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
+        original_model_group: The original model group. example: "gpt-3.5-turbo"
+        original_exception: The original exception.
+        **kwargs: Keyword arguments.
+
+    Returns:
+        The response from the successful fallback model group.
+    Raises:
+        The most recent exception if all fallback model groups fail.
     """
+
+    ### BASE CASE ### MAX FALLBACK DEPTH REACHED
+    if fallback_depth >= max_fallbacks:
+        raise original_exception
+
     error_from_fallbacks = original_exception
     for mg in fallback_model_group:
         if mg == original_model_group:
@@ -36,6 +60,8 @@ async def run_async_fallback(
             kwargs.setdefault("metadata", {}).update(
                 {"model_group": mg}
             )  # update model_group used, if fallbacks are done
+            kwargs["fallback_depth"] = fallback_depth + 1
+            kwargs["max_fallbacks"] = max_fallbacks
             response = await litellm_router.async_function_with_fallbacks(
                 *args, **kwargs
             )
@@ -66,7 +92,25 @@ def run_sync_fallback(
     **kwargs,
 ) -> Any:
     """
-    Iterate through the model groups and try calling that deployment.
+    Synchronous version of run_async_fallback.
+    Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
+
+    If the call is successful, returns the response.
+    If the call fails, continues to the next fallback model group.
+    If all fallback model groups fail, it raises the most recent exception.
+
+    Args:
+        litellm_router: The litellm router instance.
+        *args: Positional arguments.
+        fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
+        original_model_group: The original model group. example: "gpt-3.5-turbo"
+        original_exception: The original exception.
+        **kwargs: Keyword arguments.
+
+    Returns:
+        The response from the successful fallback model group.
+    Raises:
+        The most recent exception if all fallback model groups fail.
     """
     error_from_fallbacks = original_exception
     for mg in fallback_model_group:

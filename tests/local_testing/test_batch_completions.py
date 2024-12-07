@@ -37,6 +37,9 @@ def test_batch_completions():
         print(result)
         print(len(result))
         assert len(result) == 3
+
+        for response in result:
+            assert response.choices[0].message.content is not None
     except Timeout as e:
         print(f"IN TIMEOUT")
         pass
@@ -66,7 +69,7 @@ def test_batch_completions_models():
 def test_batch_completion_models_all_responses():
     try:
         responses = batch_completion_models_all_responses(
-            models=["j2-light", "claude-instant-1.2"],
+            models=["j2-light", "claude-3-haiku-20240307"],
             messages=[{"role": "user", "content": "write a poem"}],
             max_tokens=10,
         )

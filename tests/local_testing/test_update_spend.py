@@ -27,7 +27,7 @@ import pytest
 import litellm
 from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
@@ -41,7 +41,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     info_key_fn,
     update_key_fn,
 )
-from litellm.proxy.proxy_server import block_user, user_api_key_auth
+from litellm.proxy.proxy_server import user_api_key_auth
+from litellm.proxy.management_endpoints.customer_endpoints import block_user
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
     spend_user_fn,
@@ -53,7 +54,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     BlockUsers,
     DynamoDBArgs,
@@ -62,7 +63,6 @@ from litellm.proxy._types import (
     NewUserRequest,
     UpdateKeyRequest,
 )
-from litellm.proxy.utils import DBClient
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -77,13 +77,12 @@ def prisma_client():
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
-    # Assuming DBClient is a class that needs to be instantiated
+    # Assuming PrismaClient is a class that needs to be instantiated
     prisma_client = PrismaClient(
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.custom_db_client = None
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )

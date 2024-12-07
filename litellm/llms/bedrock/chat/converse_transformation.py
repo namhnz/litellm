@@ -5,7 +5,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 import copy
 import time
 import types
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, has_tool_call_blocks
+from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
 
 from ...prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
 from ..common_utils import BedrockError, get_bedrock_tool_name
@@ -82,15 +82,20 @@ class AmazonConverseConfig:
             "response_format",
         ]
 
+        ## Filter out 'cross-region' from model name
+        base_model = self._get_base_model(model)
+
         if (
-            model.startswith("anthropic")
-            or model.startswith("mistral")
-            or model.startswith("cohere")
-            or model.startswith("meta.llama3-1")
+            base_model.startswith("anthropic")
+            or base_model.startswith("mistral")
+            or base_model.startswith("cohere")
+            or base_model.startswith("meta.llama3-1")
+            or base_model.startswith("meta.llama3-2")
+            or base_model.startswith("amazon.nova")
         ):
             supported_params.append("tools")
 
-        if model.startswith("anthropic") or model.startswith("mistral"):
+        if base_model.startswith("anthropic") or base_model.startswith("mistral"):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
@@ -130,6 +135,43 @@ class AmazonConverseConfig:
     def get_supported_image_types(self) -> List[str]:
         return ["png", "jpeg", "gif", "webp"]
 
+    def get_supported_document_types(self) -> List[str]:
+        return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+
+    def _create_json_tool_call_for_response_format(
+        self,
+        json_schema: Optional[dict] = None,
+        schema_name: str = "json_tool_call",
+    ) -> ChatCompletionToolParam:
+        """
+        Handles creating a tool call for getting responses in JSON format.
+
+        Args:
+            json_schema (Optional[dict]): The JSON schema the response should be in
+
+        Returns:
+            AnthropicMessagesTool: The tool call to send to Anthropic API to get responses in JSON format
+        """
+
+        if json_schema is None:
+            # Anthropic raises a 400 BadRequest error if properties is passed as None
+            # see usage with additionalProperties (Example 5) https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+            _input_schema = {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {},
+            }
+        else:
+            _input_schema = json_schema
+
+        _tool = ChatCompletionToolParam(
+            type="function",
+            function=ChatCompletionToolParamFunctionChunk(
+                name=schema_name, parameters=_input_schema
+            ),
+        )
+        return _tool
+
     def map_openai_params(
         self,
         model: str,
@@ -156,31 +198,20 @@ class AmazonConverseConfig:
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                if json_schema is not None:
-                    _tool_choice = self.map_tool_choice_values(
-                        model=model, tool_choice="required", drop_params=drop_params  # type: ignore
+                _tool_choice = {"name": schema_name, "type": "tool"}
+                _tool = self._create_json_tool_call_for_response_format(
+                    json_schema=json_schema,
+                    schema_name=schema_name if schema_name != "" else "json_tool_call",
+                )
+                optional_params["tools"] = [_tool]
+                optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                    tool=SpecificToolChoiceBlock(
+                        name=schema_name if schema_name != "" else "json_tool_call"
                     )
-
-                    _tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=schema_name, parameters=json_schema
-                        ),
-                    )
-
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
-                else:
-                    if litellm.drop_params is True or drop_params is True:
-                        pass
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(
-                                value
-                            ),
-                            status_code=400,
-                        )
+                )
+                optional_params["json_mode"] = True
+                if non_default_params.get("stream", False) is True:
+                    optional_params["fake_stream"] = True
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -213,12 +244,70 @@ class AmazonConverseConfig:
             and messages is not None
             and has_tool_call_blocks(messages)
         ):
-            raise litellm.UnsupportedParamsError(
-                message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param to enable tool calling.",
-                model="",
-                llm_provider="anthropic",
-            )
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="bedrock",
+                )
         return optional_params
+
+    @overload
+    def _get_cache_point_block(
+        self, message_block: dict, block_type: Literal["system"]
+    ) -> Optional[SystemContentBlock]:
+        pass
+
+    @overload
+    def _get_cache_point_block(
+        self, message_block: dict, block_type: Literal["content_block"]
+    ) -> Optional[ContentBlock]:
+        pass
+
+    def _get_cache_point_block(
+        self, message_block: dict, block_type: Literal["system", "content_block"]
+    ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
+        if message_block.get("cache_control", None) is None:
+            return None
+        if block_type == "system":
+            return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
+        else:
+            return ContentBlock(cachePoint=CachePointBlock(type="default"))
+
+    def _transform_system_message(
+        self, messages: List[AllMessageValues]
+    ) -> Tuple[List[AllMessageValues], List[SystemContentBlock]]:
+        system_prompt_indices = []
+        system_content_blocks: List[SystemContentBlock] = []
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                _system_content_block: Optional[SystemContentBlock] = None
+                _cache_point_block: Optional[SystemContentBlock] = None
+                if isinstance(message["content"], str) and len(message["content"]) > 0:
+                    _system_content_block = SystemContentBlock(text=message["content"])
+                    _cache_point_block = self._get_cache_point_block(
+                        cast(dict, message), block_type="system"
+                    )
+                elif isinstance(message["content"], list):
+                    for m in message["content"]:
+                        if m.get("type", "") == "text" and len(m["text"]) > 0:
+                            _system_content_block = SystemContentBlock(text=m["text"])
+                            _cache_point_block = self._get_cache_point_block(
+                                m, block_type="system"
+                            )
+                if _system_content_block is not None:
+                    system_content_blocks.append(_system_content_block)
+                if _cache_point_block is not None:
+                    system_content_blocks.append(_cache_point_block)
+                system_prompt_indices.append(idx)
+        if len(system_prompt_indices) > 0:
+            for idx in reversed(system_prompt_indices):
+                messages.pop(idx)
+        return messages, system_content_blocks
 
     def _transform_request(
         self,
@@ -227,33 +316,14 @@ class AmazonConverseConfig:
         optional_params: dict,
         litellm_params: dict,
     ) -> RequestObject:
-        system_prompt_indices = []
-        system_content_blocks: List[SystemContentBlock] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: Optional[SystemContentBlock] = None
-                if isinstance(message["content"], str) and len(message["content"]) > 0:
-                    _system_content_block = SystemContentBlock(text=message["content"])
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type", "") == "text" and len(m["text"]) > 0:
-                            _system_content_block = SystemContentBlock(text=m["text"])
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-
+        messages, system_content_blocks = self._transform_system_message(messages)
         inference_params = copy.deepcopy(optional_params)
         additional_request_keys = []
         additional_request_params = {}
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
-        json_mode: Optional[bool] = inference_params.pop(
-            "json_mode", None
-        )  # used for handling json_schema
+        inference_params.pop("json_mode", None)  # used for handling json_schema
         ## TRANSFORMATION ##
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
@@ -323,7 +393,6 @@ class AmazonConverseConfig:
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-
         ## LOGGING
         if logging_obj is not None:
             logging_obj.post_call(
@@ -451,7 +520,7 @@ class AmazonConverseConfig:
         """
         Abbreviations of regions AWS Bedrock supports for cross region inference
         """
-        return ["us", "eu"]
+        return ["us", "eu", "apac"]
 
     def _get_base_model(self, model: str) -> str:
         """
@@ -460,6 +529,11 @@ class AmazonConverseConfig:
         Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         """
+        if model.startswith("bedrock/"):
+            model = model.split("/")[1]
+
+        if model.startswith("converse/"):
+            model = model.split("/")[1]
 
         potential_region = model.split(".", 1)[0]
         if potential_region in self._supported_cross_region_inference_region():

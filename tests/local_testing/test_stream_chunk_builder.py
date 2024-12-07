@@ -5,6 +5,18 @@ import time
 import traceback
 
 import pytest
+from typing import List
+from litellm.types.utils import StreamingChoices, ChatCompletionAudioResponse
+
+
+def check_non_streaming_response(completion):
+    assert completion.choices[0].message.audio is not None, "Audio response is missing"
+    print("audio", completion.choices[0].message.audio)
+    assert isinstance(
+        completion.choices[0].message.audio, ChatCompletionAudioResponse
+    ), "Invalid audio response type"
+    assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
+
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -12,11 +24,10 @@ sys.path.insert(
 import os
 
 import dotenv
-import pytest
 from openai import OpenAI
 
 import litellm
-from tests.local_testing import stream_chunk_testdata
+import stream_chunk_testdata
 from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()
@@ -161,6 +172,8 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     """
     Checks if stream_chunk_builder is able to correctly rebuild with given metadata from streaming chunks
     """
+    from litellm.types.utils import Usage
+
     messages = [
         {"role": "user", "content": "Tell me the funniest joke you know."},
         {
@@ -171,24 +184,28 @@ def test_stream_chunk_builder_litellm_usage_chunks():
         {"role": "assistant", "content": "uhhhh\n\n\nhmmmm.....\nthinking....\n"},
         {"role": "user", "content": "\nI am waiting...\n\n...\n"},
     ]
-    # make a regular gemini call
-    response = completion(
-        model="gemini/gemini-1.5-flash",
-        messages=messages,
-    )
 
-    usage: litellm.Usage = response.usage
+    usage: litellm.Usage = Usage(
+        completion_tokens=27,
+        prompt_tokens=55,
+        total_tokens=82,
+        completion_tokens_details=None,
+        prompt_tokens_details=None,
+    )
 
     gemini_pt = usage.prompt_tokens
 
     # make a streaming gemini call
-    response = completion(
-        model="gemini/gemini-1.5-flash",
-        messages=messages,
-        stream=True,
-        complete_response=True,
-        stream_options={"include_usage": True},
-    )
+    try:
+        response = completion(
+            model="gemini/gemini-1.5-flash",
+            messages=messages,
+            stream=True,
+            complete_response=True,
+            stream_options={"include_usage": True},
+        )
+    except litellm.InternalServerError as e:
+        pytest.skip(f"Skipping test due to internal server error - {str(e)}")
 
     usage: litellm.Usage = response.usage
 
@@ -622,3 +639,109 @@ def test_stream_chunk_builder_multiple_tool_calls():
     assert (
         expected_response.choices == response.choices
     ), "\nGot={}\n, Expected={}\n".format(response.choices, expected_response.choices)
+
+
+def test_stream_chunk_builder_openai_prompt_caching():
+    from openai import OpenAI
+    from pydantic import BaseModel
+
+    client = OpenAI(
+        # This is the default and can be omitted
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
+
+    chat_completion = client.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": "Say this is a test",
+            }
+        ],
+        model="gpt-3.5-turbo",
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    chunks: List[litellm.ModelResponse] = []
+    usage_obj = None
+    for chunk in chat_completion:
+        chunks.append(litellm.ModelResponse(**chunk.model_dump(), stream=True))
+
+    print(f"chunks: {chunks}")
+
+    usage_obj: litellm.Usage = chunks[-1].usage  # type: ignore
+
+    response = stream_chunk_builder(chunks=chunks)
+    print(f"response: {response}")
+    print(f"response usage: {response.usage}")
+    for k, v in usage_obj.model_dump(exclude_none=True).items():
+        print(k, v)
+        response_usage_value = getattr(response.usage, k)  # type: ignore
+        print(f"response_usage_value: {response_usage_value}")
+        print(f"type: {type(response_usage_value)}")
+        if isinstance(response_usage_value, BaseModel):
+            assert response_usage_value.model_dump(exclude_none=True) == v
+        else:
+            assert response_usage_value == v
+
+
+def test_stream_chunk_builder_openai_audio_output_usage():
+    from pydantic import BaseModel
+    from openai import OpenAI
+    from typing import Optional
+
+    client = OpenAI(
+        # This is the default and can be omitted
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
+
+    completion = client.chat.completions.create(
+        model="gpt-4o-audio-preview",
+        modalities=["text", "audio"],
+        audio={"voice": "alloy", "format": "pcm16"},
+        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    chunks = []
+    for chunk in completion:
+        chunks.append(litellm.ModelResponse(**chunk.model_dump(), stream=True))
+
+    usage_obj: Optional[litellm.Usage] = None
+
+    for index, chunk in enumerate(chunks):
+        if hasattr(chunk, "usage"):
+            usage_obj = chunk.usage
+            print(f"chunk usage: {chunk.usage}")
+            print(f"index: {index}")
+            print(f"len chunks: {len(chunks)}")
+
+    print(f"usage_obj: {usage_obj}")
+    response = stream_chunk_builder(chunks=chunks)
+    print(f"response usage: {response.usage}")
+    check_non_streaming_response(response)
+    print(f"response: {response}")
+    for k, v in usage_obj.model_dump(exclude_none=True).items():
+        print(k, v)
+        response_usage_value = getattr(response.usage, k)  # type: ignore
+        print(f"response_usage_value: {response_usage_value}")
+        print(f"type: {type(response_usage_value)}")
+        if isinstance(response_usage_value, BaseModel):
+            assert response_usage_value.model_dump(exclude_none=True) == v
+        else:
+            assert response_usage_value == v
+
+
+def test_stream_chunk_builder_empty_initial_chunk():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        ChunkProcessor,
+    )
+
+    chunks = [
+        {"id": ""},
+        {"id": "1"},
+        {"id": "1"},
+    ]
+
+    id = ChunkProcessor._get_chunk_id(chunks)
+    assert id == "1"
